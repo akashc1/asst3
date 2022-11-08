@@ -42,28 +42,23 @@ static inline int nextPow2(int n) {
 // Also, as per the comments in cudaScan(), you can implement an
 // "in-place" scan, since the timing harness makes a copy of input and
 // places it in result
-__global__ void upsweep_kernel(int *output, int N, int two_d, int two_dplus1)
+__global__ void upsweep_kernel(int *output, int N, int N_ceil, int two_d, int two_dplus1)
 {
         int index = blockIdx.x * blockDim.x + threadIdx.x;
         index = index * two_dplus1;
-        if (index < N) {
+
+        if (index + two_dplus1 - 1 < N_ceil) {
             output[index + two_dplus1 - 1] += output[index + two_d - 1];
         }
+
 }
 
-__global__ void downsweep_kernel(int *output, int N, int two_d, int two_dplus1)
+__global__ void downsweep_kernel(int *output, int N, int N_ceil, int two_d, int two_dplus1)
 {
         int index = blockIdx.x * blockDim.x + threadIdx.x;
         index = index * two_dplus1;
-        if (two_d == N / 2 and index == 0){
-            output[N-1] = 0;
-        }
-        __syncthreads();
-        if (index < N) {
-            if (index + two_d - 1 >= N)
-                output[index + two_d - 1] = 0;
-            if (index + two_dplus1 - 1 >= N)
-                output[index + two_dplus1 - 1] = 0;
+
+        if (index + two_dplus1 - 1 < N_ceil) {
             int tmp = output[index + two_d - 1];
             output[index + two_d - 1] = output[index + two_dplus1 - 1];
             output[index + two_dplus1 - 1] += tmp;
@@ -81,18 +76,35 @@ void exclusive_scan(int* input, int N, int* result)
     // on the CPU.  Your implementation will need to make multiple calls
     // to CUDA kernel functions (that you must write) to implement the
     // scan.
-    for (int two_d = 1; two_d <= N/2; two_d *= 2) {
+    int N_ceil = nextPow2(N);
+
+    cudaMemset(result + N, 0, (N_ceil - N) * sizeof(int));
+
+    for (int two_d = 1; two_d <= N_ceil/2; two_d *= 2) {
         int two_dplus1 = two_d * 2;
-        int num_threads = N / two_dplus1;
+        int num_threads = N_ceil / two_dplus1;
         int blocks = (num_threads + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-        upsweep_kernel<<<blocks, THREADS_PER_BLOCK>>>(result, N, two_d, two_dplus1);
+        if (num_threads < THREADS_PER_BLOCK) {
+            blocks = 1;
+        } else {
+            num_threads = THREADS_PER_BLOCK;
+        }
+        upsweep_kernel<<<blocks, num_threads>>>(result, N, N_ceil, two_d, two_dplus1);
         cudaDeviceSynchronize();
     }
-    for (int two_d = N / 2; two_d >= 1; two_d /= 2) {
+
+    cudaMemset(result + N_ceil - 1, 0, sizeof(int));
+
+    for (int two_d = N_ceil / 2; two_d >= 1; two_d /= 2) {
         int two_dplus1 = two_d * 2;
-        int num_threads = N / two_dplus1;
+        int num_threads = N_ceil / two_dplus1;
         int blocks = (num_threads + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
-        downsweep_kernel<<<blocks, THREADS_PER_BLOCK>>>(result, N, two_d, two_dplus1);
+        if (num_threads < THREADS_PER_BLOCK) {
+            blocks = 1;
+        } else {
+            num_threads = THREADS_PER_BLOCK;
+        }
+        downsweep_kernel<<<blocks, num_threads>>>(result, N, N_ceil, two_d, two_dplus1);
         cudaDeviceSynchronize();
     }
 
@@ -108,6 +120,9 @@ void exclusive_scan(int* input, int N, int* result)
 // above. Students should not modify it.
 double cudaScan(int* inarray, int* end, int* resultarray)
 {
+    // int inarray[7] = {0, 1, 2, 3, 4, 5, 6};
+    // end = inarray + 7;
+
     int* device_result;
     int* device_input;
     int N = end - inarray;  
@@ -122,7 +137,12 @@ double cudaScan(int* inarray, int* end, int* resultarray)
     // the simplicity of a power of two only solution.
 
     int rounded_length = nextPow2(end - inarray);
-    
+    // printf("Value of input array : [");
+    // for (int i = 0; i < N; i++) {
+    //     printf("%d, ", inarray[i]);
+    // }
+    // printf("]\n");
+
     cudaMalloc((void **)&device_result, sizeof(int) * rounded_length);
     cudaMalloc((void **)&device_input, sizeof(int) * rounded_length);
 
@@ -143,7 +163,11 @@ double cudaScan(int* inarray, int* end, int* resultarray)
     double endTime = CycleTimer::currentSeconds();
        
     cudaMemcpy(resultarray, device_result, (end - inarray) * sizeof(int), cudaMemcpyDeviceToHost);
-
+    // printf("Value of result array : [");
+    // for (int i = 0; i < N; i++) {
+    //     printf("%d, ", resultarray[i]);
+    // }
+    // printf("]\n");
     double overallDuration = endTime - startTime;
     return overallDuration; 
 }
