@@ -483,13 +483,10 @@ __global__ void kernelRenderPixels() {
     __shared__ uint prefixSumScratch[2 * SCAN_BLOCK_DIM];
     __shared__ uint relevant_circle_idx[SCAN_BLOCK_DIM];
 
-    // copy data from global image to block buffer
-    __shared__ float4 support[THREADS_PER_BLOCK];
     float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * imageWidth + pixelX)]);
-    support[thread_idx_1d] = *imgPtr;
 
     // create local pointer to be used for local writes/reads
-    float4* local_ptr = &support[blockDim.x * threadIdx.y + threadIdx.x];
+    float4 local_copy = *imgPtr;
 
     for (int window_start = 0; window_start < num_circles; window_start += BLOCK_DIM) {
         unsigned int thread_circle_id = window_start + thread_idx_1d;
@@ -543,14 +540,14 @@ __global__ void kernelRenderPixels() {
             }
 
             // update pixel values
-            shadePixel(global_circle_idx, pixelCenterNorm, p, local_ptr);
+            shadePixel(global_circle_idx, pixelCenterNorm, p, &local_copy);
 
         }
         __syncthreads();  // ensure all threads have finished shading
     }
 
     // write local value back to global memory
-    *imgPtr = *local_ptr;
+    *imgPtr = local_copy;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////
